@@ -1,0 +1,930 @@
+---
+title: "Final Project"
+author: "Samuel Capparelli"
+date: "May 13, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r include=FALSE}
+library(tidyverse)
+library(rvest)
+library(xts)
+library(zoo)
+library(readr)
+library(readxl)
+library(quantmod)
+library(gridExtra)
+
+Project_Data_Trade_Balance <- read_excel("School Documents/Time Series/Project Data - Trade Balance.xlsx")
+UK_US_exchange_rate <- read_excel("School Documents/Time Series/UK US exchange rate.xls")
+US_Discount_Rate <- read_excel("School Documents/Time Series/US-Discount Rate.xls")
+UK_Discount_Rate <- read_excel("School Documents/Time Series/UK- Discount Rate.xls")
+
+
+Trade_balance <- as.zoo(Project_Data_Trade_Balance$Balance, order.by = Project_Data_Trade_Balance$Month, frequency = 12)
+TB_xts <- as.xts(Trade_balance)
+TB_xts <- TB_xts %>%
+  to.monthly(OHLC=FALSE)
+frequency(TB_xts)
+
+    ##Can't use the getsymbols function due to the pound not being a consistent form of currency for the UK. Instead used Fed data
+Exchange <- as.zoo(UK_US_exchange_rate$Fx, order.by = UK_US_exchange_rate$Date)
+Exchange <- as.xts(Exchange)
+Exchange <- na.spline(Exchange)
+exchange_monthly_average <- apply.monthly(Exchange,mean,na.rm=TRUE)
+exchange_monthly_average <- exchange_monthly_average %>%
+  to.monthly(OHLC=FALSE)
+
+
+US_Rate <- as.zoo(US_Discount_Rate$Rate, order.by = US_Discount_Rate$Month, frequency =12)
+US_Rate <- as.xts(US_Rate)
+US_Rate <- US_Rate %>%
+  to.monthly(OHLC=FALSE)
+
+UK_Rate <- as.zoo(UK_Discount_Rate$Rate, order.by = UK_Discount_Rate$Month)
+UK_Rate <- as.xts(UK_Rate)
+UK_Rate <- UK_Rate %>%
+  to.monthly(OHLC=FALSE)
+  ##UK CPI
+
+uk_cpi <- function(year=1956){
+  
+  cpi_link <- paste0("http://www.inflation.eu/inflation-rates/great-britain/historic-inflation/cpi-inflation-great-britain-",year,".aspx")
+  cpi_html <- read_html(cpi_link)
+  
+  at <- cpi_html %>% 
+    html_nodes(".tabledata1 td , .tabledata2 td") %>%
+    html_attrs()
+  at_chosen <- at==at[[2]]
+  
+  reg_temp <- ".[0-9]*[.][0-9]*.%"
+  
+  at_temp <- cpi_html %>% 
+    html_nodes(".tabledata1 td , .tabledata2 td") %>% 
+    html_text() %>% 
+    str_subset(reg_temp) %>% 
+    sub(".%.*","",x=.,) %>% 
+    as.numeric()
+  
+  #get the monthly cpi
+  at_temp <- at_temp[seq(1,to = 24,by=2)]
+  return(at_temp)
+}
+
+UnitedK_cpi <- matrix(0,62,12)
+for(this_year in 1956:2017){
+  UnitedK_cpi[this_year-1955,] <- uk_cpi(this_year)
+}
+length(c(UnitedK_cpi))
+UnitedK_cpi <- t(UnitedK_cpi)
+UnitedK_cpi_ts <- ts(c(UnitedK_cpi),start = 1956,end = 2017, frequency = 12)
+UnitedK_cpi_xts <- as.xts(UnitedK_cpi_ts)
+
+us_cpi <- function(year=1956){
+  
+  cpi_link <- paste0("http://www.inflation.eu/inflation-rates/united-states/historic-inflation/cpi-inflation-united-states-",year,".aspx")
+  cpi_html <- read_html(cpi_link)
+  
+  at <- cpi_html %>% 
+    html_nodes(".tabledata1 td , .tabledata2 td") %>%
+    html_attrs()
+  at_chosen <- at==at[[2]]
+  
+  reg_temp <- ".[0-9]*[.][0-9]*.%"
+  
+  at_temp <- cpi_html %>% 
+    html_nodes(".tabledata1 td , .tabledata2 td") %>% 
+    html_text() %>% 
+    str_subset(reg_temp) %>% 
+    sub(".%.*","",x=.,) %>% 
+    as.numeric()
+  
+  #get the monthly cpi
+  at_temp <- at_temp[seq(1,to = 24,by=2)]
+  return(at_temp)
+}
+UnitedS_cpi <- matrix(0,62,12)
+for(this_year in 1956:2017){
+  UnitedS_cpi[this_year-1955,] <- us_cpi(this_year)
+}
+
+length(c(UnitedS_cpi))
+UnitedS_cpi <- t(UnitedS_cpi)
+UnitedS_cpi_ts <- ts(c(UnitedS_cpi),start = 1956,end = 2017,frequency = 12)
+
+UnitedS_cpi_xts <- as.xts(UnitedS_cpi_ts)
+
+##Trim all data to the correct years 1985 -1996 - provides 133 entries
+US_cpi <-  UnitedS_cpi_xts['1985-01-01/1996-01-01']
+UK_cpi <- UnitedK_cpi_xts['1985-01-01/1996-01-01']
+Exchange_ma <- exchange_monthly_average['1985-01-01/1996-01-01']
+US_Rate_xts <- US_Rate['1985-01-01/1996-01-01']
+UK_Rate_xts <- UK_Rate['1985-01-01/1996-01-01']
+Fisher <-  UK_Rate_xts - US_Rate_xts
+##Creating a dataframe to more easily use ggplot
+
+Df1 <- merge(US_cpi, UK_cpi, TB_xts, Exchange_ma, US_Rate_xts, UK_Rate_xts, Fisher)
+
+
+## Differencing
+US_cpi_diff <- US_cpi %>% 
+  diff()
+
+UK_cpi_diff <- UK_cpi %>% 
+  diff()
+
+TB_diff <- TB_xts %>% 
+  diff()
+
+Exchange_ma_diff <- Exchange_ma %>% 
+  diff()
+US_Rate_diff <- US_Rate_xts %>% 
+  diff()
+
+UK_Rate_diff <- UK_Rate_xts %>% 
+  diff()
+
+
+
+
+Fisher_diff <-Fisher %>%
+  diff()
+
+Df2 <- merge(US_cpi_diff, UK_cpi_diff, TB_diff, Exchange_ma_diff, US_Rate_diff, UK_Rate_diff, Fisher_diff)
+
+##Plotting
+
+
+library(ggplot2)
+library(forecast)
+
+
+plotUS_CPI<- ggplot(Df1, aes(x = Index, y = US_cpi)) + geom_line() 
+ACFUS_CPI<- ggAcf(US_cpi)
+PACFUS_PACF <-ggPacf(US_cpi)
+
+
+
+plotUS_CPI_Diff <- ggplot(Df2, aes(x = Index, y = US_cpi_diff)) + geom_line()
+ACFUS_CPI_Diff <- ggAcf(US_cpi_diff)
+PACFUS_CPI_Diff <- ggPacf(US_cpi_diff)
+
+
+plotUK_CPI <-ggplot(Df1, aes(x= Index, y = UK_cpi)) + geom_line()
+ACFUK_CPI <- ggAcf(UK_cpi)
+PACFUK_CPI <- ggPacf(UK_cpi)
+
+
+plotUK_CPI_Diff <-ggplot(Df2, aes(x= Index, y = UK_cpi_diff)) + geom_line()
+ACFUK_CPI_Diff <- ggAcf(UK_cpi_diff)
+PACFUK_CPI_Diff <- ggPacf(UK_cpi_diff)
+grid.arrange(plotUK_CPI_Diff, ACFUK_CPI_Diff, PACFUK_CPI_Diff)
+
+
+plotTB <- ggplot(Df1, aes(x = Index, y=TB_xts)) + geom_line()
+ACFTB <-  ggAcf(TB_xts)
+PACFTB <- ggPacf(TB_xts)
+grid.arrange(plotTB, ACFTB, PACFTB)
+
+plotTB_Diff <-ggplot(Df2, aes(x= Index, y=TB_diff)) + geom_line()
+ACFTB_Diff <- ggAcf(TB_diff)
+PACFTB_Diff <- ggPacf(TB_diff)
+grid.arrange(plotTB_Diff, ACFTB_Diff, PACFTB_Diff)
+
+plotExch <-  ggplot(Df1, aes(x= Index, y = Exchange_ma)) + geom_line()
+ACFExch <- ggAcf(Exchange_ma)
+PACFExch <- ggPacf(Exchange_ma)
+grid.arrange(plotExch, ACFExch, PACFExch)
+
+plotExch_diff <- ggplot(Df2, aes(x= Index, y =Exchange_ma_diff)) + geom_line()
+ACFExch_diff <- ggAcf(Exchange_ma_diff)
+PACFExch_diff <- ggPacf(Exchange_ma_diff)
+grid.arrange(plotExch_diff, ACFExch_diff, PACFExch_diff)
+
+plotUS_Rate <-  ggplot(Df1, aes(x= Index, y= US_Rate_xts)) + geom_line()
+ACFUS_Rate <- ggAcf(US_Rate_xts)
+PACFUS_Rate <- ggPacf(US_Rate_xts)
+grid.arrange(plotUS_Rate, ACFUS_Rate, PACFUS_Rate)
+
+plotUS_Rate_diff <- ggplot(Df2, aes(x= Index, y= US_Rate_diff)) + geom_line() 
+ACFUS_Rate_diff <- ggAcf(US_Rate_diff)
+PACFUS_Rate_diff <- ggPacf(US_Rate_diff)
+grid.arrange(plotUS_Rate_diff, ACFUS_Rate_diff, PACFUS_Rate_diff)
+
+plotUK_Rate <- ggplot(Df1, aes(x=Index, y=UK_Rate_xts)) + geom_line()
+ACFUK_Rate <- ggAcf(UK_Rate_xts)
+PACFUK_Rate <- ggPacf(UK_Rate_xts)
+grid.arrange(plotUK_Rate, ACFUK_Rate,PACFUK_Rate)
+
+plotUK_Rate_diff <- ggplot(Df2, aes(x= Index, y = UK_Rate_diff))+geom_line()
+ACFUK_Rate_diff <- ggAcf(UK_Rate_diff)
+PACF_Rate_diff <- ggPacf(UK_Rate_diff)
+grid.arrange(plotUK_Rate_diff,ACFUK_Rate_diff,PACF_Rate_diff)
+
+plotFisher <-  ggplot(Df1, aes(x=Index, y=Fisher))+geom_line()
+ACFFisher <- ggAcf(Fisher)
+PACFFisher <- ggPacf(Fisher)
+grid.arrange(plotFisher,ACFFisher, PACFFisher)
+
+plotFisher_diff <- ggplot(Df2, aes(x=Index, y=Fisher_diff)) + geom_line()
+ACFFisher_diff <- ggAcf(Fisher_diff)
+PACFFisher_diff <- ggPacf(Fisher_diff)
+grid.arrange(plotFisher_diff, ACFFisher_diff, PACFFisher_diff)
+
+
+##Determining Lag Relationships with Exchange Rates
+
+US_Cpi_CCf<- ggCcf(drop(Exchange_ma),drop(US_cpi)) +ggtitle("US CPI Correlation")
+US_Cpi_diff_CCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(US_cpi_diff[-1])) + ggtitle("US CPI Difference Correlation")
+
+UK_Cpi_CCf <- ggCcf(drop(Exchange_ma), drop(UK_cpi)) + ggtitle("UK CPI Correlation")
+UK_Cpi_Diff_CCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(UK_cpi[-1])) + ggtitle("UK CPI Difference Correlation")
+
+TB_CCf <- ggCcf(drop(Exchange_ma), drop(TB_xts)) + ggtitle("Trade Balance Correlation")
+TB_Diff_CCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(TB_diff[-1])) + ggtitle("Trade Balance Difference Correlation")
+
+US_Rate_CCf <- ggCcf(drop(Exchange_ma), drop(US_Rate_xts)) + ggtitle("US Interest Rate Correlation")
+US_Rate_Diff_CCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(US_Rate_diff[-1])) + ggtitle("US Interest Rate Difference Correlation")
+
+UK_Rate_CCf <- ggCcf(drop(Exchange_ma), drop(UK_Rate_xts)) + ggtitle("UK Interest Rate Correlation")
+UK_Rate_Diff_CCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(UK_Rate_diff[-1])) + ggtitle("UK Interest Rate Difference Correlation")
+
+ggCcf(drop(Exchange_ma), drop(Fisher)) + ggtitle("Fisher Correlation")
+FisherDiffCCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(Fisher_diff[-1])) + ggtitle("Fisher Difference Correlation")
+
+grid.arrange(US_Cpi_CCf, UK_Cpi_CCf, TB_CCf, US_Rate_CCf, UK_Rate_CCf)
+grid.arrange(US_Cpi_diff_CCf, UK_Cpi_Diff_CCf, TB_Diff_CCf, US_Rate_Diff_CCf, UK_Rate_Diff_CCf)
+
+## I've found that dynlm can not be used on xts variables
+
+Exch <- as.ts(Exchange_ma)
+US_cpi_ts <- as.ts(US_cpi)
+UK_cpi_ts <- as.ts(UK_cpi)
+UK_cpi_zoo <- as.zoo(UK_cpi)
+TB_ts <- as.ts(TB_xts)
+US_Rate_ts <- as.ts(US_Rate_xts)
+UK_Rate_ts <- as.ts(UK_Rate_xts)
+TB_zoo <- as.zoo(TB_xts)
+US_Rate_zoo <- as.zoo(US_Rate_xts)
+UK_Rate_zoo <- as.zoo(UK_Rate_xts)
+Exch_diff <- as.ts(Exchange_ma_diff)
+US_cpi_diff_ts <- as.ts(US_cpi_diff)
+UK_cpi_diff_ts <- as.ts(UK_cpi_diff)
+TB_diff_ts <- as.ts(TB_diff)
+US_Rate_diff_ts <-  as.ts(US_Rate_diff)
+UK_Rate_diff_ts <-  as.ts(UK_Rate_diff)
+Fisher_ts <- as.ts(Fisher)
+Fisher_diff_ts <- as.ts(Fisher_diff)
+
+
+##Running the regression
+
+library(dynlm)
+library(forecast)
+
+RegFull <- dynlm(Exch ~ L(US_cpi_ts, -13) +L(US_cpi_ts,7) + L(US_cpi_ts, 23) +
+                  L(UK_cpi_ts, -6 )+ 
+                    L(TB_ts, -15)+ L(TB_ts, -5) + 
+                   L(US_Rate_ts, -24) + L(US_Rate_ts, 24) + 
+                   L(UK_Rate_ts, 15))
+
+Reg1 <-  dynlm(Exch ~ L(US_cpi_ts, -1)+L(US_cpi_ts, 19) + L(US_cpi_ts, 35)+
+                 L(UK_cpi_ts, 6) + 
+                 L(TB_ts, -13) + L(TB_ts, 7)+ 
+                 L(US_Rate_ts, 36) + L(US_Rate_ts, -12)+
+                 L(UK_Rate_ts, 27) + L(Exch, 12))
+
+RegFullDiff <- dynlm(Exch_diff ~ L(US_cpi_diff_ts, -13) + L(US_cpi_diff_ts, 23)+
+                       L(UK_cpi_diff_ts, 3)+L(UK_cpi_diff_ts,18)+
+                       L(TB_diff_ts, 0)+
+                       L(US_Rate_diff_ts, 2)+
+                       L(UK_Rate_diff_ts, 23)+ L(UK_Rate_diff_ts, -18))
+b <- model.matrix(RegFullDiff)
+colnames(b) <- c( "Intercept", "US_CPI_L_13", "US_CPI_L23", "UK_CPI_L3", "UK_CPI_L18", "TB",  "US_Rate_L2", "UK_Rate_L23", "UK_Rate_L_18")
+RegFullDiffDf <- as.data.frame(b)
+
+
+Reg1Diff <- dynlm(Exch_diff ~  L(US_cpi_diff_ts, -13)+ L(US_cpi_diff_ts,23)+
+                    L(UK_cpi_diff_ts, 18)+
+                    L(UK_Rate_diff_ts, -18) + L(UK_Rate_diff_ts, 23))
+c <- model.matrix(Reg1Diff)
+colnames(c) <- c("Intercept", "US_CPI_L_13","US_CPI_L23", "UK_CPI_L18", "UK_Rate_L_18", "UK_Rate_L23")
+Reg1DiffDf <- as.data.frame(c)
+
+Reg2Diff <- dynlm(Exch_diff ~ L(US_cpi_diff_ts, 23)+
+                       L(UK_cpi_diff_ts,18)+
+                       L(UK_Rate_diff_ts, -18) + L(UK_Rate_diff_ts,23))
+
+d <- model.matrix(Reg2Diff)
+colnames(d) <- c("Intercept", "US_CPI_L23", "UK_CPI_L18", "UK_Rate_L_18", "UK_Rate_L23")
+Reg2DiffDf <-  as.data.frame(d)
+
+
+RegFisher <-dynlm(Exch ~ L(Fisher_ts, -16) + L(Fisher_ts, -3) + L(Fisher_ts,3) + L(Fisher_ts, 5))
+
+RegFisherDiff <-  dynlm(Exch_diff ~  L(Fisher_diff_ts, 15)+ L(Fisher_diff_ts,10))
+e <- model.matrix(RegFisherDiff)
+colnames(e) <-c("Intercept", "Fisher_L15","Fisher_L10")
+RegFisherDiffDf <- as.data.frame(e)
+
+
+
+summary(RegFull)
+summary(Reg1)
+summary(RegFullDiff)
+summary(Reg1Diff)
+summary(Reg2Diff)
+summary(RegFisher)
+summary(RegFisherDiff)
+
+##Fitting models to the residuals
+
+ggAcf(Reg1$residuals)
+ggPacf(Reg1$residuals)
+
+ggAcf(RegFull$residuals)
+ggPacf(RegFull$residuals)
+
+ggAcf(RegFullDiff$residuals)
+ggPacf(RegFullDiff$residuals)
+
+ACFReg1Diff<- ggAcf(Reg1Diff$residuals)
+PACFReg1Diff <- ggPacf(Reg1Diff$residuals)
+grid.arrange(ACFReg1Diff,PACFReg1Diff)
+
+ACFReg2Diff <-ggAcf(Reg2Diff$residuals)
+PACFReg2Diff <- ggPacf(Reg2Diff$residuals)
+grid.arrange(ACFReg2Diff, PACFReg2Diff)
+
+ACFRegFisherDiff <-ggAcf(RegFisherDiff$residuals)
+PACFRegFisherDiff <- ggPacf(RegFisherDiff$residuals)
+grid.arrange(FisherDiffCCf,ACFRegFisherDiff, PACFRegFisherDiff)
+
+##Reg1_arima <- auto.arima(Reg1$residuals, max.p =5, max.q = 5, stepwise = FALSE)
+##Reg1_arima
+
+##RegFull_arima <-  auto.arima(RegFull$residuals, max.p =5, max.q = 5, stepwise = FALSE)
+##RegFull_arima
+
+##Reg1b_arima <-auto.arima(Reg1b$residuals)
+##Reg1b_arima
+
+##RegFullDiff_arima <-  auto.arima(RegFullDiff$residuals, max.p = 5, max.q = 5, stepwise = FALSE)
+##RegFullDiff_arima
+
+##Reg1Diff_arima <-  auto.arima(Reg1Diff$residuals, max.p = 5, max.q = 5, stepwise = FALSE)
+##Reg1Diff_arima
+
+##Reg2Diff_arima <-  auto.arima(Reg2Diff$residuals, max.p = 5, max.q  =5,  stepwise = FALSE)
+##Reg2Diff_arima
+
+##RegFisher_arima <- auto.arima(RegFisher$residuals, max.p = 5, max.q = 5, stepwise = FALSE)
+##RegFisher_arima
+
+##RegFisherDiff_arima <- auto.arima(RegFisherDiff$residuals, max.p =5, max.q = 5, stepwise = FALSE)
+##RegFisherDiff_arima
+
+##Subsetting the response variable and running the GLS models
+
+library(nlme)
+
+ExchDiff <- Exchange_ma_diff["1987-01/1994-07"] 
+ExchDiff <- as.ts(ExchDiff)
+
+glsFullDiff <- gls(ExchDiff ~ US_CPI_L_13 + US_CPI_L23 + 
+                     UK_CPI_L3 + UK_CPI_L18 +
+                     US_Rate_L2+
+                     UK_Rate_L_18 + UK_Rate_L23 + TB , data = RegFullDiffDf, correlation = corARMA(q=1), control = list(singular.ok = TRUE))
+summary(glsFullDiff)
+
+ExchDiffReg1 <-  Exchange_ma_diff["1987-01/1994-07"]
+ExchDiffReg1 <-  as.ts(ExchDiffReg1)
+
+gls1Diff <- gls(ExchDiffReg1 ~ US_CPI_L_13 + US_CPI_L23 +
+                  UK_CPI_L18 +
+                  UK_Rate_L_18 + UK_Rate_L23, data = Reg1DiffDf, correlation = corARMA( q=5))
+summary(gls1Diff)
+
+
+ExchDiffReg2 <-  Exchange_ma_diff["1987-01/1994-07"]
+ExchDiffReg2 <-  as.ts(ExchDiffReg2)
+
+
+gls2Diff <- gls(ExchDiffReg2 ~ US_CPI_L23+
+                  UK_CPI_L18 + 
+                  UK_Rate_L_18 + UK_Rate_L23, data = Reg2DiffDf, correlation = corARMA( q=5))
+
+ summary(gls2Diff)
+
+ExchDiffRegFish <-  Exchange_ma_diff["1986-05/"]
+ExchDiffRegFish <-  as.ts(ExchDiffRegFish)
+
+glsFisherDiff <- gls(ExchDiffRegFish ~  Fisher_L10 + Fisher_L15, data = RegFisherDiffDf, correlation = corARMA(q=1))
+
+summary(glsFisherDiff)
+
+```
+
+   The goal of this project was to determine if the properties of exchange rates that one expects to see when utilizing the International Fisher Effect would be apparent when using real data for the exchange rate and interest rates. The International Fisher Effect seeks to use the difference of nominal interest rates to determine if an exchange rate will appreciate or depreciate. If the home interest rate is greater than the foreign interest rate then the currency will depreciate. The simplest form of this model has the percent change in exchange rates being equal to the difference of nominal interest rates. Therefore, I decided to use the interest rates of the UK and US from 1985 to 1996 to see if there is a significant relationship for each of these variables.  Beyond interest rates, it is also known that the economic factors of trade balance and inflation rates impact the exchange rates between countries. The logic for the trade balance being a determinant of exchange rate is because of its effect on the supply and demand of foreign currency. When a home country has a trade deficit with a foreign country then there is increased demand for the foreign currency. Using the basic concepts of supply and demand we know that increased demand leads to a higher price, or in this case an appreciation of the foreign currency. The effect that inflation has on exchange rates is more indirect than interest rates. The inflation rate often represents the level of security in a country and the more security a country is perceived to have the more likely there will be greater investment in that country. This investment increases the demand for currency, which, as I previously mentioned, appreciates the currency. Inflation also impacts the interest rate. To calculate the real interest rate for a country you add the nominal rate and the inflation rate.  While there is no consideration for this real interest rate in the  International Fisher Effect, it does seem that the effect that inflation has on interest rates should be considered.It is because of these facts that I have included the monthly trade balance as well as the inflation rates for the UK and US from 1985 to 1996 in my project data.  
+   
+   I acquired my monthly interest rate and exchange rate data from the Federal Reserve Economic Data (FRED) website and the monthly inflation rate data from the website [link](  inflation.eu). I should mention that I used the discount rates set by the central banks of the US and UK for the nominal interest rates and the CPI inflation for the inflation rates. After uploading this data into R, trimming it to the aforementioned time frame, and creating the differenced versions of each variables, I conducted exploratory analysis for each of the variables.   
+
+```{r echo=FALSE, warning=FALSE}
+grid.arrange(plotExch, ACFExch, PACFExch,
+plotExch_diff, ACFExch_diff, PACFExch_diff)
+auto.arima(Exchange_ma_diff)
+```
+   
+  The monthly exchange rate will be serving as my response variable in the project and based off the time series plot there seems to be a slight linear trend present in the non-differenced data that is removed in the differenced data. The ACF and PACF plots for the non-differenced data seem to back this hypothesis in the sense that there is the gradual decline in the ACF plot and the PACF only has a correlation present at lag 1. Both of these are common characteristics of random walks, which may mean that when the models are run it would be better to use the differenced data. This idea is furthered by the plots of the differenced data of the monthly exchange rate.  The linear trend is removed, and, instead of the gradual decrease in the correlations of the ACF plot, there is a single correlation present that immediately dies away. I would also like to recognize the pattern present in the PACF plot for the differenced dataset and the way that it gradually dies away. Combining what is seen in the ACF and PACF plot, I would surmise that the differenced exchange rate can be modeled by an MA(1) model. I fit an ARIMA model to check my hypothesis and the result was a SARIMA (0,0,1)(0,0,1)[12] model. This result gives some credence to my hypothesis, I just didn't recognize the seasonality parameter in the plots. Moving forward in the project this seasonality parameter seems to have little effect on the residuals once they are fit with an ARIMA model.        
+   
+```{r echo=FALSE, warning=FALSE}
+grid.arrange(plotUS_Rate, ACFUS_Rate, PACFUS_Rate,
+plotUS_Rate_diff, ACFUS_Rate_diff, PACFUS_Rate_diff)
+```
+	
+  I would also like to highlight some properties in a few of the other variables that seem to be important. Like the exchange rate, the non-differenced interest rate data for the US also seems to have the properties of a random walk. This is interesting because these rates are deliberately set by the fed in order to obtain certain targets for things such as inflation or economic growth. Due to this fact, I would have assumed that there would be more order to the data for the interest rates. After differencing the data, we get some interesting plots that provide some indication of how useful this data will be in the future. Because rates don't tend to fluctuate a lot, the differenced dataset tends to just make lines at 0 with the occasional jump where changes in the rate occur. As seen later in the report, this lack of movement limits the significance of this variable when building the model.  The fact that there is still autocorrelation is interesting because the rates are set by people responding to economic conditions and I wouldn't expect time to play such a role in their decision making process. If I were to do further analysis on just the interest rates, I would expect that economic factors such as inflation and GDP growth would have a stronger relationship. This is because the central bankers are concerned with maintaining certain targets for these economic factors.     
+	  
+```{r echo=FALSE, warning=FALSE}
+grid.arrange(plotUK_Rate, ACFUK_Rate,PACFUK_Rate,
+plotUK_Rate_diff,ACFUK_Rate_diff,PACF_Rate_diff)
+```
+	
+  The UK interest data seems to have similar properties as the US's interest rate, but with some more fluctuation. Like the US data, the non-differenced data has an ACF plot indicative of a random walk and the time series plot doesn't allude to stationarity of the mean because of a shock and then downward trend. Once the data is differenced the UK interest rates gain stationarity, but, like the US interest rates, much of the graph can be characterized by a flat line at zero. Unlike the US rates, there is only autocorrelation at lag 1. This makes more sense than the autocorrelation of the US rates because one would expect that today's interest rates would affect next months, but it seems unlikely that the interest rate from today would have such an impact on the interest rates six months from now. These three variables seemed to have the most information to offer, especially with the hindsight of completing the project.  Plots for US and UK CPI, and trade balance can be found at the end of the report (Figures I-VI). I would just like to quickly mention what can be concluded or surmised from examining the plots of these three variables. For all three of these variables there is significant correlation found at lag 1, 7, and 12. When these variables are differenced, the correlation becomes more prominent at the lag 12. I would also like to mention that the trade balance shows signs of minor linear trend and some seasonality. The linear trend can be seen in the time-series plot with a slight positive trend. The seasonality can be seen in the ACF plot where there are peaks and valleys at lag 1 and 12. This indicates that there is seasonality of frequency 12. Once the trade balance is differenced, however, this seasonality is no longer present, at least in the ACF plots.   
+
+```{r, echo=FALSE}
+grid.arrange(US_Cpi_CCf, UK_Cpi_CCf, TB_CCf, US_Rate_CCf, UK_Rate_CCf)
+
+```
+	  
+  Now, moving onto building the models for this project. I first ran the cross-correlations for all the non-differenced data to determine the appropriate lag relationships that each of the variables have with the response variable. The plots can be found above and the resulting full model included all the variables with the following lags: US CPI at lag -13, 7, and 23; UK CPI at lag -6; Trade balance at lag -15, and -5; US interest rates at lag -24 and 24; and UK interest rates at lag 15. After running the regression model, I fit an ARIMA model to the residuals. The residuals were fit the best with a seasonal ARIMA model so I added to 12 lags to all the variables as well as added a version of the response variable with 12 lags to the regression. The resulting ARIMA model that best fit the residuals was of order (1,1,1). Since this was iterated I decided to proceed with the differenced variables. In the exploratory analysis I highlighted the non-differenced variables that could be modeled with a random walk. This led me to believe that to proceed with this project I would have to use the differenced version of the variables.  After running the first regression, this ended up being the case.  
+	   
+```{r, echo=FALSE}
+grid.arrange(US_Cpi_diff_CCf, UK_Cpi_Diff_CCf, TB_Diff_CCf, US_Rate_Diff_CCf, UK_Rate_Diff_CCf)
+```
+	   
+  Once I determined that I would have to use the differenced variables I referred to the cross-correlation plots for the differenced variables and the monthly average exchange rate-these can be seen above. Based off the plots I created a full differenced model that included the following lags: US CPI at lags -13, and 23; UK CPI at lags 3, and 18; trade balance at lag 0; US interest rates at lag 2; and UK interest rates lag 23, and -18. After running the regression with this model I fit an ARIMA model to the residuals and the resulting best fit was an MA(1). This was a good sign in these that the differencing did what it was supposed to and removed the iterated component. I then ran the GLS model with a correlation of MA(1) considered in the model. The results of this model had only variable of Uk interest rates at  lag -18 as significant at the .05 alpha level. I repeated the process I conducted with the full differenced model, removing the variable with the largest p-value on each repetition, until all the regression coefficients were significant.     
+	   
+```{r, echo=FALSE}
+
+grid.arrange(ACFReg1Diff,PACFReg1Diff)
+summary(gls1Diff)
+```
+ 
+   The table and the plots above are for the first model that I ran that had all significant coefficients. The order of the correlation for the residuals was (0,0,5) or an MA(5) model. Upon looking at the ACF plot for the residuals one can see that there is significant correlation at lag 5; which is to be expected of an MA(5) model. However, we would also expect all the correlations up until 5 to also be significant.  Looking at the GLS output we can see that all the p-values indicate that the coefficients are significant when considered at an alpha level of .1. The first coefficient is the least significant of the 5 and represents the relationship that exists between the change in US CPI at lag -13 with the change in exchange rate. Based on the coefficient there is a positive relationship where a positive change of 1 leads to change.026. The second coefficient is also for a lag of US CPI and has a positive relationship, except it is at a lag of 23 where a change of 1 leads to a change of .04. The third is the only negative coefficient and indicates that there is negative relationship of the change in UK CPI at lag 18 and the change in exchange rate. The coefficient indicates that if there is a change of 1 there will be a decrease in the change of the exchange rate by .013. The last two are both for the change in the UK interest rate, the first being at negative lag -18 and the second at lag 23. A change of 1 in either leads to a change of .2 in the exchange rate.  
+	   
+   While this model does not represent the International Fisher Effect, it still actually adheres to other concepts found in economic theory. You can model exchange rate fluctuations by drawing what is basically a supply and demand curve where the demand curve is represented by the domestic interest rate and the supply by the foreign interest rate. The theory states that an increase in domestic exchange rate, and foreign exchange rate causes an appreciation, while an increase in domestic inflation rate decreases the exchange rate. The theory also takes into account expected exchange rate, but that won't be reflected in my model. Considering that the exchange rate for this project is represented in terms of the UK currency--meaning that UK inflation and interest rate is domestic--the model supports this theory well. The lags present in this model limit it in terms of application. An economist wouldn't be able to make very good predictions considering most of the significant coefficients are reliant on values from almost two years into the future.  I would also like to point out that this model does not include any of the US interest rates. In a vacuum this could mean that the relationship of foreign interest rate isn't strong with the exchange rate. It could also have resulted from the fact that there is not much change in the US interest rate; therefore, most of the differenced values are zero. This doesn't give much insight when running the model, but, in the context of reality, foreign interest rate may have a more significant relationship with exchange rate.  
+
+```{r, echo=FALSE}
+grid.arrange(ACFReg2Diff, PACFReg2Diff)
+ summary(gls2Diff)
+```
+	    
+  To get all the variables under the alpha level of .05, I ran the model without the US Inflation Rate of lag -18. The residuals were basically the same as the previous model and the best fit for the ARIMA was still MA(5). Once again, one can double check this with the ACF plot. In this new model, all the coefficients have the same properties, but many have increased in significance and in value. Additionally, comparing the AICs of the two models, this new one has an AIC of -261, while the old model has an AIC of -255. So, there are some indicators this is the better model. And yet, if I were an economist that was forced to use one of these models, I would choose the first because it maintains a coefficient based on a lag that is not in the future. This provides me with the ability to look at values in the past to make predictions about the future exchange rate. This ability doesn't exist in the second model because of the removal of the only variable with negative lag. This hinders the real-life usefulness of the model.   
+   	
+```{r, echo=FALSE}
+grid.arrange(FisherDiffCCf,ACFRegFisherDiff, PACFRegFisherDiff)
+summary(glsFisherDiff)
+```
+
+  For curiosity's sake, I also ran a model that examined the relationship that exists between the difference between the nominal interest rates of the two countries-the premise of the International Fisher Effect--and the exchange rate. I was trying to directly test if there is some truth to the International Fisher Effect when in a vacuum of sorts. I started by creating a variable that was the US interest rate minus the UK interest rate. Because of the properties of the exchange rate, I still used the differenced version of each of the variables. Using the plots above I could determine that the significant lags are -18, 10, and 15. Despite lag -18 seeming to have the most significant correlation, in the context of the model it was insignificant. After removing this lag, the regression with remaining lags had a best fit of MA(1) and the ACF plot seems to support this model. The GLS output above shows that both coefficients for the lags are significant at the .05 alpha level considering that both p-values are less than .05. The interpretation of the first coefficient is that is that if there is a change of 1 in the difference between the nominal interest rates of the US and UK at lag 10 then the change in the exchange rate will decrease by .018. The second coefficient's interpretation is that if there is change of 1 in the difference of between the nominal interest rates at lag 15 there will be an increase in the change of the of the exchange rate of .021. These findings provide support for the International Fisher Effect and so too does the fact that the model has the smallest AIC of the models examined. This model has an AIC of -373 compared to the first and second having AICs of -216 and -261, respectively. The AIC takes into account the number of coefficients in the model so it isn't surprising that this model has the smallest AIC considering there are only two coefficients. It is unfortunate that the lag of -18 coefficient wasn't significant in the model because without the negative lag variable this model suffers from the same issue as the second model of the original variables. There is not much real-world applicability for a model that predicts the exchange rate if it is reliant on values from the future.    
+
+## Abstract    
+###Additional Figures I-VI  
+  
+```{r echo=FALSE, warning=FALSE}
+grid.arrange(plotUS_CPI, ACFUS_CPI, PACFUS_PACF, 
+plotUS_CPI_Diff, ACFUS_CPI_Diff, PACFUS_CPI_Diff)
+
+grid.arrange(plotUK_CPI, ACFUK_CPI, PACFUK_CPI,
+plotUK_CPI_Diff, ACFUK_CPI_Diff, PACFUK_CPI_Diff)
+
+grid.arrange(plotTB, ACFTB, PACFTB,
+plotTB_Diff, ACFTB_Diff, PACFTB_Diff)
+```
+
+###Project Code
+
+```{r, eval=FALSE}
+library(tidyverse)
+library(rvest)
+library(xts)
+library(zoo)
+library(readr)
+library(readxl)
+library(quantmod)
+Project_Data_Trade_Balance <- read_excel("School Documents/Time Series/Project Data - Trade Balance.xlsx")
+UK_US_exchange_rate <- read_excel("School Documents/Time Series/UK US exchange rate.xls")
+US_Discount_Rate <- read_excel("School Documents/Time Series/US-Discount Rate.xls")
+UK_Discount_Rate <- read_excel("School Documents/Time Series/UK- Discount Rate.xls")
+
+
+Trade_balance <- as.zoo(Project_Data_Trade_Balance$Balance, order.by = Project_Data_Trade_Balance$Month, frequency = 12)
+TB_xts <- as.xts(Trade_balance)
+TB_xts <- TB_xts %>%
+  to.monthly(OHLC=FALSE)
+frequency(TB_xts)
+
+    ##Can't use the getsymbols function due to the pound not being a consistent form of currency for the UK. Instead used Fed data
+Exchange <- as.zoo(UK_US_exchange_rate$Fx, order.by = UK_US_exchange_rate$Date)
+Exchange <- as.xts(Exchange)
+Exchange <- na.spline(Exchange)
+exchange_monthly_average <- apply.monthly(Exchange,mean,na.rm=TRUE)
+exchange_monthly_average <- exchange_monthly_average %>%
+  to.monthly(OHLC=FALSE)
+
+
+US_Rate <- as.zoo(US_Discount_Rate$Rate, order.by = US_Discount_Rate$Month, frequency =12)
+US_Rate <- as.xts(US_Rate)
+US_Rate <- US_Rate %>%
+  to.monthly(OHLC=FALSE)
+
+UK_Rate <- as.zoo(UK_Discount_Rate$Rate, order.by = UK_Discount_Rate$Month)
+UK_Rate <- as.xts(UK_Rate)
+UK_Rate <- UK_Rate %>%
+  to.monthly(OHLC=FALSE)
+  ##UK CPI
+
+uk_cpi <- function(year=1956){
+  
+  cpi_link <- paste0("http://www.inflation.eu/inflation-rates/great-britain/historic-inflation/cpi-inflation-great-britain-",year,".aspx")
+  cpi_html <- read_html(cpi_link)
+  
+  at <- cpi_html %>% 
+    html_nodes(".tabledata1 td , .tabledata2 td") %>%
+    html_attrs()
+  at_chosen <- at==at[[2]]
+  
+  reg_temp <- ".[0-9]*[.][0-9]*.%"
+  
+  at_temp <- cpi_html %>% 
+    html_nodes(".tabledata1 td , .tabledata2 td") %>% 
+    html_text() %>% 
+    str_subset(reg_temp) %>% 
+    sub(".%.*","",x=.,) %>% 
+    as.numeric()
+  
+  #get the monthly cpi
+  at_temp <- at_temp[seq(1,to = 24,by=2)]
+  return(at_temp)
+}
+
+UnitedK_cpi <- matrix(0,62,12)
+for(this_year in 1956:2017){
+  UnitedK_cpi[this_year-1955,] <- uk_cpi(this_year)
+}
+
+UnitedK_cpi <- t(UnitedK_cpi)
+UnitedK_cpi_ts <- ts(c(UnitedK_cpi),start = 1956,end = 2017, frequency = 12)
+UnitedK_cpi_xts <- as.xts(UnitedK_cpi_ts)
+
+us_cpi <- function(year=1956){
+  
+  cpi_link <- paste0("http://www.inflation.eu/inflation-rates/united-states/historic-inflation/cpi-inflation-united-states-",year,".aspx")
+  cpi_html <- read_html(cpi_link)
+  
+  at <- cpi_html %>% 
+    html_nodes(".tabledata1 td , .tabledata2 td") %>%
+    html_attrs()
+  at_chosen <- at==at[[2]]
+  
+  reg_temp <- ".[0-9]*[.][0-9]*.%"
+  
+  at_temp <- cpi_html %>% 
+    html_nodes(".tabledata1 td , .tabledata2 td") %>% 
+    html_text() %>% 
+    str_subset(reg_temp) %>% 
+    sub(".%.*","",x=.,) %>% 
+    as.numeric()
+  
+  #get the monthly cpi
+  at_temp <- at_temp[seq(1,to = 24,by=2)]
+  return(at_temp)
+}
+UnitedS_cpi <- matrix(0,62,12)
+for(this_year in 1956:2017){
+  UnitedS_cpi[this_year-1955,] <- us_cpi(this_year)
+}
+
+length(c(UnitedS_cpi))
+UnitedS_cpi <- t(UnitedS_cpi)
+UnitedS_cpi_ts <- ts(c(UnitedS_cpi),start = 1956,end = 2017,frequency = 12)
+
+UnitedS_cpi_xts <- as.xts(UnitedS_cpi_ts)
+
+##Trim all data to the correct years 1985 -1996 - provides 133 entries
+US_cpi <-  UnitedS_cpi_xts['1985-01-01/1996-01-01']
+UK_cpi <- UnitedK_cpi_xts['1985-01-01/1996-01-01']
+Exchange_ma <- exchange_monthly_average['1985-01-01/1996-01-01']
+US_Rate_xts <- US_Rate['1985-01-01/1996-01-01']
+UK_Rate_xts <- UK_Rate['1985-01-01/1996-01-01']
+Fisher <-  UK_Rate_xts - US_Rate_xts
+##Creating a dataframe to more easily use ggplot
+
+Df1 <- merge(US_cpi, UK_cpi, TB_xts, Exchange_ma, US_Rate_xts, UK_Rate_xts, Fisher)
+
+
+## Differencing
+US_cpi_diff <- US_cpi %>% 
+  diff()
+
+UK_cpi_diff <- UK_cpi %>% 
+  diff()
+
+TB_diff <- TB_xts %>% 
+  diff()
+
+Exchange_ma_diff <- Exchange_ma %>% 
+  diff()
+US_Rate_diff <- US_Rate_xts %>% 
+  diff()
+
+UK_Rate_diff <- UK_Rate_xts %>% 
+  diff()
+
+
+
+
+Fisher_diff <-Fisher %>%
+  diff()
+
+Df2 <- merge(US_cpi_diff, UK_cpi_diff, TB_diff, Exchange_ma_diff, US_Rate_diff, UK_Rate_diff, Fisher_diff)
+
+##Plotting
+
+
+library(ggplot2)
+library(forecast)
+library(gridExtra)
+auto.arima(Exchange_ma_diff)
+
+plotUS_CPI<- ggplot(Df1, aes(x = Index, y = US_cpi)) + geom_line() 
+ACFUS_CPI<- ggAcf(US_cpi)
+PACFUS_PACF <-ggPacf(US_cpi)
+grid.arrange(plotUS_CPI, ACFUS_CPI, PACFUS_PACF)
+
+
+plotUS_CPI_Diff <- ggplot(Df2, aes(x = Index, y = US_cpi_diff)) + geom_line()
+ACFUS_CPI_Diff <- ggAcf(US_cpi_diff)
+PACFUS_CPI_Diff <- ggPacf(US_cpi_diff)
+grid.arrange(plotUS_CPI_Diff,ACFUS_CPI_Diff, PACFUS_CPI_Diff)
+
+plotUK_CPI <-ggplot(Df1, aes(x= Index, y = UK_cpi)) + geom_line()
+ACFUK_CPI <- ggAcf(UK_cpi)
+PACFUK_CPI <- ggPacf(UK_cpi)
+grid.arrange(plotUK_CPI,ACFUK_CPI, PACFUK_CPI)
+
+plotUK_CPI_Diff <-ggplot(Df2, aes(x= Index, y = UK_cpi_diff)) + geom_line()
+ACFUK_CPI_Diff <- ggAcf(UK_cpi_diff)
+PACFUK_CPI_Diff <- ggPacf(UK_cpi_diff)
+grid.arrange(plotUK_CPI_Diff, ACFUK_CPI_Diff, PACFUK_CPI_Diff)
+
+
+plotTB <- ggplot(Df1, aes(x = Index, y=TB_xts)) + geom_line()
+ACFTB <-  ggAcf(TB_xts)
+PACFTB <- ggPacf(TB_xts)
+grid.arrange(plotTB, ACFTB, PACFTB)
+
+plotTB_Diff <-ggplot(Df2, aes(x= Index, y=TB_diff)) + geom_line()
+ACFTB_Diff <- ggAcf(TB_diff)
+PACFTB_Diff <- ggPacf(TB_diff)
+grid.arrange(plotTB_Diff, ACFTB_Diff, PACFTB_Diff)
+
+plotExch <-  ggplot(Df1, aes(x= Index, y = Exchange_ma)) + geom_line()
+ACFExch <- ggAcf(Exchange_ma)
+PACFExch <- ggPacf(Exchange_ma)
+grid.arrange(plotExch, ACFExch, PACFExch)
+
+plotExch_diff <- ggplot(Df2, aes(x= Index, y =Exchange_ma_diff)) + geom_line()
+ACFExch_diff <- ggAcf(Exchange_ma_diff)
+PACFExch_diff <- ggPacf(Exchange_ma_diff)
+grid.arrange(plotExch_diff, ACFExch_diff, PACFExch_diff)
+
+plotUS_Rate <-  ggplot(Df1, aes(x= Index, y= US_Rate_xts)) + geom_line()
+ACFUS_Rate <- ggAcf(US_Rate_xts)
+PACFUS_Rate <- ggPacf(US_Rate_xts)
+grid.arrange(plotUS_Rate, ACFUS_Rate, PACFUS_Rate)
+
+plotUS_Rate_diff <- ggplot(Df2, aes(x= Index, y= US_Rate_diff)) + geom_line() 
+ACFUS_Rate_diff <- ggAcf(US_Rate_diff)
+PACFUS_Rate_diff <- ggPacf(US_Rate_diff)
+grid.arrange(plotUS_Rate_diff, ACFUS_Rate_diff, PACFUS_Rate_diff)
+
+plotUK_Rate <- ggplot(Df1, aes(x=Index, y=UK_Rate_xts)) + geom_line()
+ACFUK_Rate <- ggAcf(UK_Rate_xts)
+PACFUK_Rate <- ggPacf(UK_Rate_xts)
+grid.arrange(plotUK_Rate, ACFUK_Rate,PACFUK_Rate)
+
+plotUK_Rate_diff <- ggplot(Df2, aes(x= Index, y = UK_Rate_diff))+geom_line()
+ACFUK_Rate_diff <- ggAcf(UK_Rate_diff)
+PACF_Rate_diff <- ggPacf(UK_Rate_diff)
+grid.arrange(plotUK_Rate_diff,ACFUK_Rate_diff,PACF_Rate_diff)
+
+plotFisher <-  ggplot(Df1, aes(x=Index, y=Fisher))+geom_line()
+ACFFisher <- ggAcf(Fisher)
+PACFFisher <- ggPacf(Fisher)
+grid.arrange(plotFisher,ACFFisher, PACFFisher)
+
+plotFisher_diff <- ggplot(Df2, aes(x=Index, y=Fisher_diff)) + geom_line()
+ACFFisher_diff <- ggAcf(Fisher_diff)
+PACFFisher_diff <- ggPacf(Fisher_diff)
+grid.arrange(plotFisher_diff, ACFFisher_diff, PACFFisher_diff)
+
+
+##Determining Lag Relationships with Exchange Rates
+
+US_Cpi_CCf<- ggCcf(drop(Exchange_ma),drop(US_cpi)) +ggtitle("US CPI Correlation")
+US_Cpi_diff_CCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(US_cpi_diff[-1])) + ggtitle("US CPI Difference Correlation")
+
+UK_Cpi_CCf <- ggCcf(drop(Exchange_ma), drop(UK_cpi)) + ggtitle("UK CPI Correlation")
+UK_Cpi_Diff_CCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(UK_cpi[-1])) + ggtitle("UK CPI Difference Correlation")
+
+TB_CCf <- ggCcf(drop(Exchange_ma), drop(TB_xts)) + ggtitle("Trade Balance Correlation")
+TB_Diff_CCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(TB_diff[-1])) + ggtitle("Trade Balance Difference Correlation")
+
+US_Rate_CCf <- ggCcf(drop(Exchange_ma), drop(US_Rate_xts)) + ggtitle("US Interest Rate Correlation")
+US_Rate_Diff_CCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(US_Rate_diff[-1])) + ggtitle("US Interest Rate Difference Correlation")
+
+UK_Rate_CCf <- ggCcf(drop(Exchange_ma), drop(UK_Rate_xts)) + ggtitle("UK Interest Rate Correlation")
+UK_Rate_Diff_CCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(UK_Rate_diff[-1])) + ggtitle("UK Interest Rate Difference Correlation")
+
+ggCcf(drop(Exchange_ma), drop(Fisher)) + ggtitle("Fisher Correlation")
+FisherDiffCCf <- ggCcf(drop(Exchange_ma_diff[-1]), drop(Fisher_diff[-1])) + ggtitle("Fisher Difference Correlation")
+
+grid.arrange(US_Cpi_CCf, UK_Cpi_CCf, TB_CCf, US_Rate_CCf, UK_Rate_CCf)
+grid.arrange(US_Cpi_diff_CCf, UK_Cpi_Diff_CCf, TB_Diff_CCf, US_Rate_Diff_CCf, UK_Rate_Diff_CCf)
+
+## I've found that dynlm can not be used on xts variables
+
+Exch <- as.ts(Exchange_ma)
+US_cpi_ts <- as.ts(US_cpi)
+UK_cpi_ts <- as.ts(UK_cpi)
+UK_cpi_zoo <- as.zoo(UK_cpi)
+TB_ts <- as.ts(TB_xts)
+US_Rate_ts <- as.ts(US_Rate_xts)
+UK_Rate_ts <- as.ts(UK_Rate_xts)
+TB_zoo <- as.zoo(TB_xts)
+US_Rate_zoo <- as.zoo(US_Rate_xts)
+UK_Rate_zoo <- as.zoo(UK_Rate_xts)
+Exch_diff <- as.ts(Exchange_ma_diff)
+US_cpi_diff_ts <- as.ts(US_cpi_diff)
+UK_cpi_diff_ts <- as.ts(UK_cpi_diff)
+TB_diff_ts <- as.ts(TB_diff)
+US_Rate_diff_ts <-  as.ts(US_Rate_diff)
+UK_Rate_diff_ts <-  as.ts(UK_Rate_diff)
+Fisher_ts <- as.ts(Fisher)
+Fisher_diff_ts <- as.ts(Fisher_diff)
+
+
+##Running the regression
+
+library(dynlm)
+library(forecast)
+
+RegFull <- dynlm(Exch ~ L(US_cpi_ts, -13) +L(US_cpi_ts,7) + L(US_cpi_ts, 23) +
+                  L(UK_cpi_ts, -6 )+ 
+                    L(TB_ts, -15)+ L(TB_ts, -5) + 
+                   L(US_Rate_ts, -24) + L(US_Rate_ts, 24) + 
+                   L(UK_Rate_ts, 15))
+
+Reg1 <-  dynlm(Exch ~ L(US_cpi_ts, -1)+L(US_cpi_ts, 19) + L(US_cpi_ts, 35)+
+                 L(UK_cpi_ts, 6) + 
+                 L(TB_ts, -13) + L(TB_ts, 7)+ 
+                 L(US_Rate_ts, 36) + L(US_Rate_ts, -12)+
+                 L(UK_Rate_ts, 27) + L(Exch, 12))
+
+RegFullDiff <- dynlm(Exch_diff ~ L(US_cpi_diff_ts, -13) + L(US_cpi_diff_ts, 23)+
+                       L(UK_cpi_diff_ts, 3)+L(UK_cpi_diff_ts,18)+
+                       L(TB_diff_ts, 0)+
+                       L(US_Rate_diff_ts, 2)+
+                       L(UK_Rate_diff_ts, 23)+ L(UK_Rate_diff_ts, -18))
+b <- model.matrix(RegFullDiff)
+?colnames
+colnames(b) <- c( "Intercept", "US_CPI_L_13", "US_CPI_L23", "UK_CPI_L3", "UK_CPI_L18", "TB",  "US_Rate_L2", "UK_Rate_L23", "UK_Rate_L_18")
+RegFullDiffDf <- as.data.frame(b)
+
+head(RegFullDiffDf)
+Reg1Diff <- dynlm(Exch_diff ~  L(US_cpi_diff_ts, -13)+ L(US_cpi_diff_ts,23)+
+                    L(UK_cpi_diff_ts, 18)+
+                    L(UK_Rate_diff_ts, -18) + L(UK_Rate_diff_ts, 23))
+c <- model.matrix(Reg1Diff)
+colnames(c) <- c("Intercept", "US_CPI_L_13","US_CPI_L23", "UK_CPI_L18", "UK_Rate_L_18", "UK_Rate_L23")
+Reg1DiffDf <- as.data.frame(c)
+
+Reg2Diff <- dynlm(Exch_diff ~ L(US_cpi_diff_ts, 23)+
+                       L(UK_cpi_diff_ts,18)+
+                       L(UK_Rate_diff_ts, -18) + L(UK_Rate_diff_ts,23))
+
+d <- model.matrix(Reg2Diff)
+colnames(d) <- c("Intercept", "US_CPI_L23", "UK_CPI_L18", "UK_Rate_L_18", "UK_Rate_L23")
+Reg2DiffDf <-  as.data.frame(d)
+
+
+RegFisher <-dynlm(Exch ~ L(Fisher_ts, -16) + L(Fisher_ts, -3) + L(Fisher_ts,3) + L(Fisher_ts, 5))
+
+RegFisherDiff <-  dynlm(Exch_diff ~  L(Fisher_diff_ts, 15)+ L(Fisher_diff_ts,10))
+e <- model.matrix(RegFisherDiff)
+colnames(e) <-c("Intercept", "Fisher_L15","Fisher_L10")
+RegFisherDiffDf <- as.data.frame(e)
+
+
+
+summary(RegFull)
+summary(Reg1)
+summary(RegFullDiff)
+summary(Reg1Diff)
+summary(Reg2Diff)
+summary(RegFisher)
+summary(RegFisherDiff)
+
+##Fitting models to the residuals
+
+ggAcf(Reg1$residuals)
+ggPacf(Reg1$residuals)
+
+ggAcf(RegFull$residuals)
+ggPacf(RegFull$residuals)
+
+ggAcf(RegFullDiff$residuals)
+ggPacf(RegFullDiff$residuals)
+
+ACFReg1Diff<- ggAcf(Reg1Diff$residuals)
+PACFReg1Diff <- ggPacf(Reg1Diff$residuals)
+grid.arrange(ACFReg1Diff,PACFReg1Diff)
+
+ACFReg2Diff <-ggAcf(Reg2Diff$residuals)
+PACFReg2Diff <- ggPacf(Reg2Diff$residuals)
+grid.arrange(ACFReg2Diff, PACFReg2Diff)
+
+ACFRegFisherDiff <-ggAcf(RegFisherDiff$residuals)
+PACFRegFisherDiff <- ggPacf(RegFisherDiff$residuals)
+grid.arrange(FisherDiffCCf,ACFRegFisherDiff, PACFRegFisherDiff)
+
+Reg1_arima <- auto.arima(Reg1$residuals, max.p =5, max.q = 5, stepwise = FALSE)
+Reg1_arima
+
+RegFull_arima <-  auto.arima(RegFull$residuals, max.p =5, max.q = 5, stepwise = FALSE)
+RegFull_arima
+
+Reg1b_arima <-auto.arima(Reg1b$residuals)
+Reg1b_arima
+
+RegFullDiff_arima <-  auto.arima(RegFullDiff$residuals, max.p = 5, max.q = 5, stepwise = FALSE)
+RegFullDiff_arima
+
+Reg1Diff_arima <-  auto.arima(Reg1Diff$residuals, max.p = 5, max.q = 5, stepwise = FALSE)
+Reg1Diff_arima
+
+Reg2Diff_arima <-  auto.arima(Reg2Diff$residuals, max.p = 5, max.q  =5,  stepwise = FALSE)
+Reg2Diff_arima
+
+RegFisher_arima <- auto.arima(RegFisher$residuals, max.p = 5, max.q = 5, stepwise = FALSE)
+RegFisher_arima
+
+RegFisherDiff_arima <- auto.arima(RegFisherDiff$residuals, max.p =5, max.q = 5, stepwise = FALSE)
+RegFisherDiff_arima
+
+##Subsetting the response variable and running the GLS models
+
+library(nlme)
+
+ExchDiff <- Exchange_ma_diff["1987-01/1994-07"] 
+ExchDiff <- as.ts(ExchDiff)
+
+glsFullDiff <- gls(ExchDiff ~ US_CPI_L_13 + US_CPI_L23 + 
+                     UK_CPI_L3 + UK_CPI_L18 +
+                     US_Rate_L2+
+                     UK_Rate_L_18 + UK_Rate_L23 + TB , data = RegFullDiffDf, correlation = corARMA(q=1), control = list(singular.ok = TRUE))
+summary(glsFullDiff)
+
+ExchDiffReg1 <-  Exchange_ma_diff["1987-01/1994-07"]
+ExchDiffReg1 <-  as.ts(ExchDiffReg1)
+
+gls1Diff <- gls(ExchDiffReg1 ~ US_CPI_L_13 + US_CPI_L23 +
+                  UK_CPI_L18 +
+                  UK_Rate_L_18 + UK_Rate_L23, data = Reg1DiffDf, correlation = corARMA( q=5))
+summary(gls1Diff)
+
+
+ExchDiffReg2 <-  Exchange_ma_diff["1987-01/1994-07"]
+ExchDiffReg2 <-  as.ts(ExchDiffReg2)
+
+
+gls2Diff <- gls(ExchDiffReg2 ~ US_CPI_L23+
+                  UK_CPI_L18 + 
+                  UK_Rate_L_18 + UK_Rate_L23, data = Reg2DiffDf, correlation = corARMA( q=5))
+
+ summary(gls2Diff)
+
+ExchDiffRegFish <-  Exchange_ma_diff["1986-05/"]
+ExchDiffRegFish <-  as.ts(ExchDiffRegFish)
+
+glsFisherDiff <- gls(ExchDiffRegFish ~  Fisher_L_18 +Fisher_L10 + Fisher_L15, data = RegFisherDiffDf, correlation = corARMA(q=1))
+
+summary(glsFisherDiff)
+
+```
